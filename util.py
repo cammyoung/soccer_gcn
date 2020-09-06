@@ -333,14 +333,12 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     return torch.sparse.FloatTensor(indices, values, shape)
 
 ### Get block diagonal matrices from graph lists
-def get_block_matrices(train_ls, test_ls, as_tensor):
+def get_block_matrices(ls, as_tensor):
     if as_tensor:
-        train_block = sparse_mx_to_torch_sparse_tensor(sp.block_diag(tuple(train_ls)))
-        test_block = sparse_mx_to_torch_sparse_tensor(sp.block_diag(tuple(test_ls)))
+        block = sparse_mx_to_torch_sparse_tensor(sp.block_diag(tuple(ls)))
     else:
-        train_block = sp.block_diag(tuple(train_ls))
-        test_block = sp.block_diag(tuple(test_ls))
-    return train_block, test_block
+        block = sp.block_diag(tuple(ls))
+    return block
 
 ### Get graphs from train and test ids
 def get_graphs(match_player, train_ids, test_ids, as_matrix, sparse):
@@ -350,14 +348,13 @@ def get_graphs(match_player, train_ids, test_ids, as_matrix, sparse):
         
     df = df.set_index('match_api_id')
     
-    g_train_ls = [create_graph(df.loc[i],
-                               as_matrix=as_matrix,
-                               sparse=sparse) for i in tqdm(train_ids, desc='Creating Train graphs')]
-    g_test_ls = [create_graph(df.loc[i],
-                              as_matrix=as_matrix,
-                              sparse=sparse) for i in tqdm(test_ids, desc='Creating Test graphs')]
+    ids = train_ids + test_ids
     
-    return g_train_ls, g_test_ls
+    g_ls = [create_graph(df.loc[i],
+                         as_matrix=as_matrix,
+                         sparse=sparse) for i in tqdm(ids, desc='Creating graphs')]
+    
+    return g_ls
 
 ### Scale features
 def scale_data(x_train, x_test):
@@ -372,19 +369,20 @@ def scale_data(x_train, x_test):
 ### Get block diagonal feature matrices
 def get_feature_matrices(x_train_scl, x_test_scl, as_tensor):
     train_ls = [sp.csr_matrix(x_train_scl[i*22:(i*22 + 22)]) for i in range(int(x_train_scl.shape[0]/22))]
-    test_ls = [sp.csr_matrix(x_test_scl[i*22:(i*22 + 22)]) for i in range(int(x_test_scl.shape[0]/22))]        
+    test_ls = [sp.csr_matrix(x_test_scl[i*22:(i*22 + 22)]) for i in range(int(x_test_scl.shape[0]/22))]
     
-    return get_block_matrices(train_ls, test_ls, as_tensor=as_tensor)
+    feat_ls = train_ls + test_ls
+    
+    return get_block_matrices(feat_ls, as_tensor=as_tensor)
 
 def one_hot_to_target_tensor(y):
     return torch.argmax(torch.Tensor(y.to_numpy(dtype='float32')), dim=1)
 
 ### Get simple block diagonal pooling matrices
 def get_pooling_matrices(train_len, test_len, as_tensor):
-    train_pool = [sp.csr_matrix(np.ones((1,22))) for i in range(train_len)]
-    test_pool = [sp.csr_matrix(np.ones((1,22))) for i in range(test_len)]
+    pool = [sp.csr_matrix(np.ones((1,22))) for i in range(train_len + test_len)]
     
-    return get_block_matrices(train_pool, test_pool, as_tensor)
+    return get_block_matrices(pool, as_tensor)
 
 def main(as_tensor=True):
     from time import time
@@ -405,11 +403,11 @@ def main(as_tensor=True):
     t = time()
     print(f"Generating graphs: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     try:
-        g_train_ls, g_test_ls = get_graphs(match_player,
-                                           train_ids,
-                                           test_ids,
-                                           as_matrix=True,
-                                           sparse=True)
+        g_ls = get_graphs(match_player,
+                          train_ids,
+                          test_ids,
+                          as_matrix=True,
+                          sparse=True)
     except Exception as e:
         print('Error creating graphs')
         raise
@@ -419,7 +417,7 @@ def main(as_tensor=True):
     t = time()
     print(f"Creating block diagonal adjacency matrices: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     try:
-        train_block_adj, test_block_adj = get_block_matrices(g_train_ls, g_test_ls, as_tensor=as_tensor)
+        block_adj = get_block_matrices(g_ls, as_tensor=as_tensor)
     except Exception as e:
         print('Error creating adjacency matrices')
         raise
@@ -429,9 +427,9 @@ def main(as_tensor=True):
     t = time()
     print(f"Creating block diagonal feature matrices: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     try:        
-        train_block_feat, test_block_feat = get_feature_matrices(x_train_scl,
-                                                                 x_test_scl,
-                                                                 as_tensor=as_tensor)
+        block_feat = get_feature_matrices(x_train_scl,
+                                          x_test_scl,
+                                          as_tensor=as_tensor)
     except Exception as e:
         print('Error creating feature matrices')
         raise
@@ -441,9 +439,9 @@ def main(as_tensor=True):
     t = time()
     print(f"Creating block diagonal pooling matrices: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     try:
-        train_block_pool, test_block_pool = get_pooling_matrices(len(y_train),
-                                                                 len(y_test),
-                                                                 as_tensor=as_tensor)
+        block_pool = get_pooling_matrices(len(y_train),
+                                          len(y_test),
+                                          as_tensor=as_tensor)
     except Exception as e:
         print('Error creating pooling matrices')
         raise
@@ -453,8 +451,16 @@ def main(as_tensor=True):
     if as_tensor:
         y_train = one_hot_to_target_tensor(y_train)
         y_test = one_hot_to_target_tensor(y_test)
+        
+        y = torch.cat((y_train, y_test), 0)
+    else:
+        y = pd.concat([y_train, y_test], axis=0)
+        
+    train_len = len(y_train)
     
-    return train_block_adj, train_block_feat, train_block_pool, y_train, test_block_adj, test_block_feat, test_block_pool, y_test
+    total_len = train_len + len(y_test)
+    
+    return block_adj, block_feat, block_pool, y, train_len, total_len
 
 def accuracy(output, labels):
     preds = output.max(1)[1].type_as(labels)
