@@ -271,6 +271,7 @@ def create_weighted_edges(one_match_player):
     
     dist = cdist(points, points)
     dist = 1 - dist/dist.max()
+    dist = np.where(dist <= 0.42, 0, dist)
     
     return list(zip(df.player_api_id.iloc[np.triu_indices(22)[0]],
                     df.player_api_id.iloc[np.triu_indices(22)[1]],
@@ -298,7 +299,7 @@ def normalize(mx, sparse=False):
     return mx
 
 ### Create graph of one match
-def create_graph(one_match_player, as_matrix, sparse):
+def create_graph(one_match_player, as_matrix, sparse, norm=True):
     df = one_match_player.reset_index().copy()
     
     # Create blank graph
@@ -319,7 +320,8 @@ def create_graph(one_match_player, as_matrix, sparse):
     if as_matrix:
         g = nx.adjacency_matrix(g)
         
-        g = normalize(g, sparse=sparse)
+        if norm:
+            g = normalize(g, sparse=sparse)
     
     return g
 
@@ -341,7 +343,7 @@ def get_block_matrices(ls, as_tensor):
     return block
 
 ### Get graphs from train and test ids
-def get_graphs(match_player, train_ids, test_ids, as_matrix, sparse):
+def get_graphs(match_player, train_ids, test_ids, as_matrix, sparse, norm=True):
     from tqdm import tqdm
     
     df = match_player.copy()
@@ -352,7 +354,8 @@ def get_graphs(match_player, train_ids, test_ids, as_matrix, sparse):
     
     g_ls = [create_graph(df.loc[i],
                          as_matrix=as_matrix,
-                         sparse=sparse) for i in tqdm(ids, desc='Creating graphs')]
+                         sparse=sparse,
+                         norm=norm) for i in tqdm(ids, desc='Creating graphs')]
     
     return g_ls
 
@@ -468,6 +471,11 @@ def accuracy(output, labels):
     correct = correct.sum()
     
     return correct / len(labels)
+
+def sgc_precompute(features, adj, degree):
+    for i in range(degree):
+        features = torch.spmm(adj, features)
+    return features
 
 if __name__ == '__main__':
     import pickle

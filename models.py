@@ -57,3 +57,18 @@ class GCN(nn.Module):
         x = self.gc2(x, adj)
         x = torch.spmm(pool, x)
         return F.log_softmax(x, dim=1)
+    
+class SGC(nn.Module):
+    """
+    A Simple PyTorch Implementation of Logistic Regression.
+    Assuming the features have been preprocessed with k-step graph propagation.
+    """
+    def __init__(self, nfeat, nclass):
+        super(SGC, self).__init__()
+
+        self.W = nn.Linear(nfeat, nclass)
+
+    def forward(self, x, adj, pool):
+        x = self.W(x)
+        x = torch.spmm(pool, x)
+        return x

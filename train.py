@@ -16,30 +16,45 @@ pkl = "data.pkl"
 with open(pkl, "rb") as f:
     block_adj, block_feat, block_pool, y, train_len, total_len = pickle.load(f)
 
+mod = "gcn"
 n_feat = block_feat.size()[1]
 n_class = y.max().item() + 1
-n_hid = 10
+n_hid = 5
+degree = 2
 learning_rate = 0.01
-weight_decay = 5e-4
+weight_decay = 0.0005
 dropout=0.5
 n_epochs = 100
 train_idx = torch.LongTensor(range(train_len))
 test_idx = torch.LongTensor(range(train_len, total_len))
 
+torch.manual_seed(42)
 
-model = models.GCN(nfeat=n_feat,
-                    nhid=n_hid,
-                    nclass=n_class,
-                    dropout=dropout)
-optimizer = optim.Adam(model.parameters(),
-                       lr=learning_rate, weight_decay=weight_decay)
-
+if mod == "gcn":
+    # https://github.com/tkipf/pygcn/blob/master/pygcn/models.py
+    model = models.GCN(nfeat=n_feat,
+                        nhid=n_hid,
+                        nclass=n_class,
+                        dropout=dropout)
+    optimizer = optim.Adam(model.parameters(),
+                           lr=learning_rate,
+                           weight_decay=weight_decay)
+elif mod == 'sgc':
+    # https://github.com/Tiiiger/SGC/blob/master/models.py
+    model = models.SGC(nfeat=n_feat,
+                       nclass=n_class)
+    optimizer = optim.LBFGS(model.parameters(), lr=1)
+    ## Not working
+    block_feat = util.sgc_precompute(block_feat, block_adj, degree)
+else:
+    raise NotImplementedError('model:{} is not implemented!'.format(mod))
+    
 def train(epoch):
     t = time.time()
     model.train()
     optimizer.zero_grad()
     output = model(block_feat, block_adj, block_pool)
-    loss_train = F.nll_loss(output[train_idx], y[train_idx])
+    loss_train = F.cross_entropy(output[train_idx], y[train_idx])
     acc_train = util.accuracy(output[train_idx], y[train_idx])
     loss_train.backward()
     optimizer.step()
@@ -52,6 +67,8 @@ def train(epoch):
           'loss_val: {:.4f}'.format(loss_val.item()),
           'acc_val: {:.4f}'.format(acc_val.item()),
           'time: {:.4f}s'.format(time.time() - t))
+    for i in model.parameters():
+        print(i)
 
 
 # def test():
